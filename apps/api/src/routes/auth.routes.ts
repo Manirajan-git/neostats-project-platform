@@ -2,12 +2,13 @@ import { Router } from "express";
 import { env } from "../config/env";
 import { authenticate } from "../middleware/authenticate";
 import { validate } from "../middleware/validate";
-import { loginSchema } from "../schemas/auth.schema";
+import { loginSchema, updateProfileSchema } from "../schemas/auth.schema";
 import {
   authCookieOptions,
   clearCookieOptions,
   issueToken,
   login,
+  updateProfile,
 } from "../services/auth.service";
 import { toSafeUser } from "../utils/userMapper";
 import { asyncHandler } from "../utils/asyncHandler";
@@ -41,5 +42,19 @@ router.get("/me", authenticate, (req, res) => {
   }
   res.status(200).json({ user: req.user });
 });
+
+/** PATCH /api/auth/profile - update the caller's own allowlisted profile fields. */
+router.patch(
+  "/profile",
+  authenticate,
+  validate(updateProfileSchema),
+  asyncHandler(async (req, res) => {
+    if (!req.user) {
+      throw new AppError(401, "UNAUTHENTICATED", "Authentication required.");
+    }
+    const user = await updateProfile(req.user.id, req.body as { name: string });
+    res.status(200).json({ user });
+  }),
+);
 
 export default router;

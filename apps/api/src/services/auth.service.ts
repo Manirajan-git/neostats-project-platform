@@ -5,6 +5,8 @@ import type { User } from "@prisma/client";
 import { env } from "../config/env";
 import { prisma } from "../lib/prisma";
 import { AppError } from "../utils/errors";
+import { toSafeUser } from "../utils/userMapper";
+import type { SafeUser } from "../types/dto";
 
 const INVALID_CREDENTIALS = "Invalid email or password.";
 
@@ -82,4 +84,13 @@ export function clearCookieOptions() {
     secure: env.isProd,
     path: "/",
   };
+}
+
+/** Updates the current user's own profile (allowlisted fields only). */
+export async function updateProfile(userId: string, input: { name: string }): Promise<SafeUser> {
+  const user = await prisma.user.update({
+    where: { id: userId },
+    data: { name: input.name },
+  });
+  return toSafeUser(user);
 }

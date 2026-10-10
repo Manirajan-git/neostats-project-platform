@@ -10,6 +10,8 @@ export class AppError extends Error {
     public readonly code: string,
     message: string,
     public readonly details?: FieldIssue[],
+    /** Optional safe extra payload (e.g. current entity on a 409 conflict). */
+    public readonly meta?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "AppError";

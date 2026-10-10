@@ -132,3 +132,44 @@ export async function deactivateUser(id: string, actorId: string): Promise<SafeU
   });
   return updated;
 }
+
+export async function activateUser(id: string): Promise<SafeUser> {
+  const target = await prisma.user.findUnique({ where: { id } });
+  if (!target) throw new AppError(404, "USER_NOT_FOUND", "User not found.");
+  if (target.isActive) {
+    throw new AppError(409, "ALREADY_ACTIVE", "This account is already active.");
+  }
+
+  const updated = await prisma.user.update({
+    where: { id },
+    data: { isActive: true },
+    select: SAFE_USER_SELECT,
+  });
+  return updated;
+}
+
+/**
+ * Minimal people directory (id, name, email, role) for project managers to
+ * pick members. Returns active users only and never any credential material.
+ */
+export async function listDirectory(q?: string): Promise<
+  Pick<SafeUser, "id" | "name" | "email" | "role">[]
+> {
+  const where = {
+    isActive: true,
+    ...(q
+      ? {
+          OR: [
+            { name: { contains: q, mode: "insensitive" as const } },
+            { email: { contains: q, mode: "insensitive" as const } },
+          ],
+        }
+      : {}),
+  };
+  return prisma.user.findMany({
+    where,
+    select: { id: true, name: true, email: true, role: true },
+    orderBy: { name: "asc" },
+    take: 100,
+  });
+}

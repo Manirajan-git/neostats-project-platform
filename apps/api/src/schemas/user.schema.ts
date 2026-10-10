@@ -65,6 +65,10 @@ export const userIdParamSchema = z.object({
   id: z.string().cuid("Invalid user id."),
 });
 
+export const directoryQuerySchema = z.object({
+  q: z.string().trim().min(1).max(100).optional(),
+});
+
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;
 export type PaginationInput = z.infer<typeof paginationSchema>;

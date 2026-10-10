@@ -7,6 +7,10 @@ import { requireTrustedOrigin } from "./middleware/trustedOrigin";
 import authRoutes from "./routes/auth.routes";
 import healthRoutes from "./routes/health.routes";
 import usersRoutes from "./routes/users.routes";
+import projectsRoutes from "./routes/projects.routes";
+import tasksRoutes from "./routes/tasks.routes";
+import notificationsRoutes from "./routes/notifications.routes";
+import dashboardRoutes, { activityRouter } from "./routes/dashboard.routes";
 
 export function createApp() {
   const app = express();
@@ -36,6 +40,11 @@ export function createApp() {
   app.use("/api/health", healthRoutes);
   app.use("/api/auth", authRoutes);
   app.use("/api/users", usersRoutes);
+  app.use("/api/projects", projectsRoutes);
+  app.use("/api/tasks", tasksRoutes);
+  app.use("/api/notifications", notificationsRoutes);
+  app.use("/api/dashboard", dashboardRoutes);
+  app.use("/api/activity", activityRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

@@ -4,6 +4,7 @@ import { authorizeRoles } from "../middleware/authorize";
 import { validate } from "../middleware/validate";
 import {
   createUserSchema,
+  directoryQuerySchema,
   paginationSchema,
   updateUserSchema,
   userIdParamSchema,
@@ -12,15 +13,32 @@ import {
   type UpdateUserInput,
 } from "../schemas/user.schema";
 import {
+  activateUser,
   createUser,
   deactivateUser,
   getUser,
+  listDirectory,
   listUsers,
   updateUser,
 } from "../services/user.service";
 import { asyncHandler } from "../utils/asyncHandler";
 
 const router = Router();
+
+/**
+ * GET /api/users/directory - minimal active-user picker for admins and project
+ * managers (registered before the Admin-only collection gate).
+ */
+router.get(
+  "/directory",
+  authenticate,
+  authorizeRoles("ADMIN", "PROJECT_MANAGER"),
+  validate(directoryQuerySchema, "query"),
+  asyncHandler(async (req, res) => {
+    const { q } = req.query as { q?: string };
+    res.status(200).json({ data: await listDirectory(q) });
+  }),
+);
 
 // Entire collection is Admin-only; 401 handled by authenticate, 403 by authorizeRoles.
 router.use(authenticate, authorizeRoles("ADMIN"));
@@ -77,6 +95,15 @@ router.patch(
         .json({ error: { code: "UNAUTHENTICATED", message: "Authentication required." } });
     }
     res.status(200).json({ data: await deactivateUser(req.params.id, actor.id) });
+  }),
+);
+
+/** PATCH /api/users/:id/activate - restore a deactivated account. */
+router.patch(
+  "/:id/activate",
+  validate(userIdParamSchema, "params"),
+  asyncHandler(async (req, res) => {
+    res.status(200).json({ data: await activateUser(req.params.id) });
   }),
 );
 

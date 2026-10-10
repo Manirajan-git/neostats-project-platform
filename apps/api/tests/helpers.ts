@@ -8,10 +8,15 @@ import { prisma } from "../src/lib/prisma";
 export const app = createApp();
 
 const createdIds: string[] = [];
+const createdProjectIds: string[] = [];
 let counter = 0;
 
 export function trackCreated(id: string): void {
   createdIds.push(id);
+}
+
+export function trackProject(id: string): void {
+  createdProjectIds.push(id);
 }
 
 /** Unique, recognisable email for isolated fixtures. */
@@ -52,6 +57,36 @@ export async function cleanupCreatedUsers(): Promise<void> {
     await prisma.user.deleteMany({ where: { id: { in: createdIds } } });
     createdIds.length = 0;
   }
+}
+
+/** Removes tracked projects (cascades members, tasks, comments, activity). */
+export async function cleanupTrackedProjects(): Promise<void> {
+  if (createdProjectIds.length > 0) {
+    await prisma.project.deleteMany({ where: { id: { in: createdProjectIds } } });
+    createdProjectIds.length = 0;
+  }
+}
+
+/** Direct fixture: project + memberships, tracked for cleanup. */
+export async function createProjectFixture(opts: {
+  name: string;
+  managerId: string;
+  members?: { userId: string; role: "MANAGER" | "MEMBER" | "VIEWER" }[];
+}): Promise<{ id: string }> {
+  const project = await prisma.project.create({
+    data: {
+      name: opts.name,
+      managerId: opts.managerId,
+      members: {
+        create: [
+          { userId: opts.managerId, role: "MANAGER" as const },
+          ...(opts.members ?? []),
+        ],
+      },
+    },
+  });
+  createdProjectIds.push(project.id);
+  return { id: project.id };
 }
 
 export function extractAuthCookie(res: request.Response): string {

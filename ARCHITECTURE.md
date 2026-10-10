@@ -1,7 +1,7 @@
 # NeoStats — Architecture Note
 
-Companion to [README.md](./README.md). Covers the decisions behind Phase 1 + Phase 2.
-Future phases (projects, tasks, real-time) will be appended here when implemented.
+Companion to [README.md](./README.md). Covers the decisions behind Phases 1–3
+(foundation, authentication/RBAC, and the full project/task product).
 
 ## 1. Frontend / backend separation
 
@@ -17,8 +17,9 @@ Future phases (projects, tasks, real-time) will be appended here when implemente
   from the Next.js process. All data access goes through the Express API (Prisma).
 - Client auth state is derived from `GET /api/auth/me` (the single source of truth),
   held in React state only — no tokens in `localStorage`/`sessionStorage`.
-- Route protection on `/dashboard` is a **UX guard** (redirect to `/login` on 401).
-  It is not a security boundary; every API request is independently authorized.
+- Route protection on `/dashboard` and every other app page is a **UX guard**
+  (redirect to `/login` on 401). It is not a security boundary; every API request
+  is independently authorized.
 
 ## 2. Authentication flow
 
@@ -73,8 +74,10 @@ universal fix on its own):
   authorization failures are deliberately distinct status codes.
 - Role checks exist only on the server; the frontend merely hides UI it knows will be
   rejected. The global `SystemRole` enum (`ADMIN`, `PROJECT_MANAGER`, `TEAM_MEMBER`,
-  `VIEWER`) is on `User`; future project-membership roles will live on a separate
-  `ProjectMember` table so global and project-level permissions never blur.
+  `VIEWER`) is on `User`; project-membership roles (`MANAGER`, `MEMBER`, `VIEWER`) live
+  on a separate `ProjectMember` table so global and project-level permissions never blur.
+  See [§9 Project access control](#9-project-access-control-404-vs-403) for how the two
+  combine.
 - Destructive invariants are enforced in the service layer, not just schemas:
   self-deactivation is blocked and the last active administrator cannot be demoted or
   deactivated.
@@ -110,6 +113,10 @@ API responses are built from an explicit `SAFE_USER_SELECT` projection plus a
   only through the admin API or the seed.
 - `prisma migrate reset` / `db push` are never used. Verification:
   `npx prisma migrate status` → "Database schema is up to date".
+- Phase 3 shipped `20261010072948_add_project_task_domain`: five new tables
+  (`Project`, `ProjectMember`, `Task`, `Comment`, `ActivityLog`, `Notification`)
+  plus four enums — purely additive, no existing table is touched, so it applies
+  cleanly to a database that already contains users.
 
 ## 7. Validation and error handling
 
@@ -118,11 +125,13 @@ API responses are built from an explicit `SAFE_USER_SELECT` projection plus a
   (e.g. `passwordHash`, `isActive` sent by clients) are rejected with 400 instead of
   silently stripped.
 - One central Express error handler produces a single JSON shape:
-  `{ error: { code, message, details? } }`.
-  Mapped: `AppError` → its status; `ZodError` → 400; Prisma `P2002` → 409, `P2025` → 404;
-  malformed JSON → 400; anything else → generic 500 with the stack logged **server-side
-  only**. Raw database errors are no longer echoed by `/api/health` (the failure is
-  logged, the response stays `{ database: { status: "down" } }`).
+  `{ error: { code, message, details?, meta? } }`.
+  Mapped: `AppError` → its status (carrying an optional `meta`, used by 409
+  conflict responses); `ZodError` → 400; Prisma `P2002` → 409, `P2025` → 404;
+  malformed JSON → 400; anything else → generic 500 with the stack logged
+  **server-side only**. Raw database errors are no longer echoed by
+  `/api/health` (the failure is logged, the response stays
+  `{ database: { status: "down" } }`).
 - Pagination is validated with a maximum `limit` of 100; list responses return explicit
   `meta` (page/limit/total/totalPages).
 
@@ -135,11 +144,101 @@ API responses are built from an explicit `SAFE_USER_SELECT` projection plus a
   tracked per test file, and deleted in `afterAll`. Test files run sequentially
   (`fileParallelism: false`) to avoid cross-file interference. The development database
   is never reset or dropped.
-- Coverage: 25 tests across `auth.test.ts` (login success/failure/generic messages,
-  inactive account, missing/invalid/expired tokens, cookie flags, logout clearing,
-  hash non-disclosure), `authorization.test.ts` (401/403 per role, deactivated-token
-  rejection, privilege-escalation attempts) and `users.test.ts` (full admin CRUD,
-  duplicates, validation, pagination limits, deactivation rules, last-admin guard,
-  seed idempotency + password-stability).
+- Coverage: **76 tests across 10 files.**
+  - Phase 1/2: `auth.test.ts` (login success/failure/generic messages, inactive
+    account, missing/invalid/expired tokens, cookie flags, logout clearing, hash
+    non-disclosure), `authorization.test.ts` (401/403 per role, deactivated-token
+    rejection, privilege-escalation attempts), `users.test.ts` (admin CRUD,
+    duplicates, validation, pagination limits, deactivation rules, last-admin guard,
+    seed idempotency + password stability).
+  - Phase 3: `projects.test.ts` (CRUD, status/manager rules, search/filter/pagination,
+    404-for-non-members), `membership.test.ts` (add/change-role/remove, owner
+    protections, invalid assignees), `tasks.test.ts` (create/edit/delete permissions,
+    assignee rules, field allowlists), `concurrency.test.ts` (stale-write → 409 with
+    `meta.task`, version increments), `comments-activity.test.ts` (comment
+    permissions, activity rows recorded), `notifications.test.ts` (assignment/comment/
+    status notifications, unread counts, read/read-all), `dashboard.test.ts`
+    (aggregates per role).
 - Unit vs integration: everything above is integration-level (HTTP + database). No
   purely mocked unit tests exist yet.
+
+## 9. Project access control (404 vs 403)
+
+All project-scoped handlers start from `loadProjectAccess(user, projectId)`
+(`lib/permissions.ts`), which resolves an **effective project role**:
+
+1. `ADMIN` → always `MANAGER`;
+2. the assigned project manager (`Project.managerId`) → `MANAGER` even without a
+   membership row;
+3. otherwise the `ProjectMember.role`, or `null` (no access).
+
+From that role three capabilities are derived and returned to the client in
+`permissions` so the UI can hide what would be rejected anyway:
+
+| Capability | Rule |
+|---|---|
+| `canManage` — edit project, manage members, create/edit/delete tasks | `ADMIN`, or global `PROJECT_MANAGER` **and** effective role `MANAGER` |
+| `canChangeStatus` — move tasks between board columns | `canManage`, or global `PROJECT_MANAGER`/`TEAM_MEMBER` with effective role `MANAGER`/`MEMBER` |
+| `canComment` | can view, and neither the global nor the project role is `VIEWER` |
+
+Deliberate response semantics:
+
+- **No access → `404`**, not 403: a caller must not learn that a project id exists.
+- **Access but insufficient rights → `403`** with a specific message (e.g. "your role
+  in this project only allows status changes").
+- Task field writes use an allowlist derived from the same capabilities: managers
+  may set `title/description/status/priority/assigneeId/dueDate`, status-capable
+  members may set **only** `status`, everyone else gets 403 — a viewer cannot smuggle
+  a title change through a status endpoint.
+- Assignees must be able to view the project (`assertAssignableToProject`), otherwise
+  `400 INVALID_ASSIGNEE`.
+
+## 10. Activity journal and notifications
+
+`lib/journal.ts` exposes `recordActivity` and `notifyUsers`, which accept a Prisma
+transaction handle. Domain services call them **inside the same transaction** as the
+change itself, so history can never disagree with data (a rolled-back change writes no
+activity row and sends no notification):
+
+- activity rows: project created/updated/archived, membership changes, task
+  created/updated/status-changed/assigned/deleted, comments;
+- notifications: task assigned, task status changed (to the assignee), comment added
+  (to assignee + creator) — the acting user never notifies themselves.
+
+Notifications are polled by the frontend (unread badge every 60 s); Socket.IO push
+sync is deferred.
+
+## 11. Optimistic concurrency (tasks)
+
+`Task.version` starts at 1 and is required on every `PATCH /api/tasks/:id`. The write
+is a single atomic statement:
+
+```sql
+UPDATE "Task" SET … , version = version + 1
+WHERE id = $1 AND version = $expected;
+```
+
+Zero rows matched ⇒ someone else committed first ⇒ read the current row and respond
+`409 TASK_VERSION_CONFLICT` with `error.meta.task`. The web client keeps a local
+version on each task, sends it with every update, and on 409 renders a conflict
+banner offering "Load latest version" — a stale editor can never silently overwrite a
+colleague, and the loser of the race is told exactly what changed.
+
+## 12. Frontend architecture
+
+- **Route groups:** everything behind the app shell lives under `src/app/(app)/`,
+  which adds layout but no URL segment — public pages stay `/`, `/login`.
+- **Shell:** `(app)/layout.tsx` composes `SessionProvider` → `ToastProvider` →
+  `AppShell` (sidebar + header + breadcrumbs + unread badge). The session loads once
+  via `GET /api/auth/me`; a 401 anywhere redirects to `/login` exactly once.
+- **Data flow:** a typed fetch client (`lib/api.ts`) wraps `fetch` with
+  `credentials: "include"` and never stores tokens; each page owns a
+  `loading | ready | error` state machine and only sets state inside promise
+  callbacks (satisfying React's `set-state-in-effect` rule).
+- **UI kit:** `components/ui.tsx` (buttons, fields, cards, badges, modal, pagination,
+  avatars) styled with the verified NeoStats brand tokens in `globals.css`
+  (lime `#7FD94F` accent, forced light theme). Toasts handle action feedback;
+  conflicts and permission errors render as inline alerts.
+- **Permission-aware UI:** buttons and forms are gated on the `permissions` object
+  returned by the API — the server remains the only enforcement point, but the UI
+  never offers an action that would 403.
