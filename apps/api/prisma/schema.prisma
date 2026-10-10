@@ -9,9 +9,19 @@ datasource db {
 
 /// Foundation model only - full domain schema lands in later phases.
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String     @id @default(cuid())
+  email        String     @unique
+  name         String
+  passwordHash String
+  role         SystemRole @default(TEAM_MEMBER)
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+enum SystemRole {
+  ADMIN
+  PROJECT_MANAGER
+  TEAM_MEMBER
+  VIEWER
 }
